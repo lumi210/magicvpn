@@ -7,18 +7,20 @@ package killswitch
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
 )
 
 const (
-	group      = "AetherGUI Kill Switch"
-	ruleMain   = "AetherGUI Kill Switch"
-	ruleCore   = "AetherGUI Kill Switch Allow Core"
-	ruleLan    = "AetherGUI Kill Switch Allow LAN"
-	ruleLoop   = "AetherGUI Kill Switch Allow Loopback"
-	ruleWarp   = "AetherGUI Kill Switch Allow WarpDNS"
+	group    = "AetherGUI Kill Switch"
+	ruleMain = "AetherGUI Kill Switch"
+	ruleCore = "AetherGUI Kill Switch Allow Core"
+	ruleGUI  = "AetherGUI Kill Switch Allow GUI"
+	ruleLan  = "AetherGUI Kill Switch Allow LAN"
+	ruleLoop = "AetherGUI Kill Switch Allow Loopback"
+	ruleWarp = "AetherGUI Kill Switch Allow WarpDNS"
 )
 
 var (
@@ -46,9 +48,15 @@ func Enable(coreExePath string) error {
 	if coreExePath == "" {
 		return fmt.Errorf("kill switch needs the core binary path")
 	}
+	guiExePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find GUI executable for kill switch: %w", err)
+	}
 	steps := [][]string{
 		{"advfirewall", "firewall", "add", "rule",
 			"name=" + ruleCore, "dir=out", "program=" + coreExePath, "action=allow"},
+		{"advfirewall", "firewall", "add", "rule",
+			"name=" + ruleGUI, "dir=out", "program=" + guiExePath, "action=allow"},
 		{"advfirewall", "firewall", "add", "rule",
 			"name=" + ruleLoop, "dir=out", "remoteip=127.0.0.0/8,::1/128", "action=allow"},
 		{"advfirewall", "firewall", "add", "rule",
@@ -81,7 +89,7 @@ func Disable() error {
 
 func disableLocked() error {
 	var firstErr error
-	for _, name := range []string{ruleMain, ruleCore, ruleLan, ruleLoop, ruleWarp} {
+	for _, name := range []string{ruleMain, ruleCore, ruleGUI, ruleLan, ruleLoop, ruleWarp} {
 		if _, err := netsh("advfirewall", "firewall", "delete", "rule", "name="+name); err != nil && firstErr == nil {
 			firstErr = err
 		}

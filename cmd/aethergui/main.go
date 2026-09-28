@@ -10,6 +10,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -22,6 +23,8 @@ import (
 	"sync"
 
 	"github.com/aethergui/aethergui/internal/app"
+	"github.com/aethergui/aethergui/internal/config"
+	"github.com/aethergui/aethergui/internal/license"
 	"github.com/aethergui/aethergui/internal/logx"
 	"github.com/aethergui/aethergui/internal/webbridge"
 )
@@ -77,6 +80,35 @@ func main() {
 		os.Exit(1)
 	}
 	defer application.Close()
+
+	licenseManager, err := license.New(license.Config{
+		Dir:       config.Dir(),
+		ServerURL: license.ServerURLFromEnv(),
+		Keys:      license.DefaultKeys,
+		Policy: license.Policy{
+			Enabled:   true,
+			TrialDays: 7,
+			Message:   "Your MagicVPN license is required to connect.",
+			Contact:   "MagicVPN support",
+		},
+		ClientVer: func() string { return Version },
+	})
+	if err != nil {
+		// A missing gate would fail open. Abort startup instead so unreadable
+		// local license state can never permit an unlicensed connection.
+		logx.Errorf("[license] initialization failed: %v", err)
+		crashLog(err)
+		os.Exit(1)
+	}
+	application.License = licenseManager
+	licenseManager.OnChange(func(snapshot license.Snapshot) {
+		if !snapshot.CanConnect {
+			go application.Disconnect()
+		}
+	})
+	licenseContext, stopLicense := context.WithCancel(context.Background())
+	defer stopLicense()
+	go licenseManager.Start(licenseContext)
 
 	bridge := webbridge.New(webbridge.Config{App: application, Assets: guiFS, Version: Version})
 	bridge.SetOnQuit(requestQuit)
