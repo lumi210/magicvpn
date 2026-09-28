@@ -9,6 +9,7 @@ import (
 	"github.com/aethergui/aethergui/internal/app"
 	"github.com/aethergui/aethergui/internal/config"
 	"github.com/aethergui/aethergui/internal/killswitch"
+	"github.com/aethergui/aethergui/internal/license"
 	"github.com/aethergui/aethergui/internal/logx"
 	"github.com/aethergui/aethergui/internal/node"
 	"github.com/aethergui/aethergui/internal/sysproxy"
@@ -137,18 +138,19 @@ type SystemInfo struct {
 
 // Snapshot is the complete UI state, pushed on every meaningful change.
 type Snapshot struct {
-	Version    VersionInfo     `json:"version"`
-	VPN        VPNInfo         `json:"vpn"`
-	Traffic    TrafficInfo     `json:"traffic"`
-	Settings   config.Settings `json:"settings"`
-	Protocols  []Protocol      `json:"protocols"`
-	ActiveKey  string          `json:"activeProtocol"`
-	Nodes      []node.Node     `json:"nodes"`
-	ActiveNode string          `json:"activeNode"`
-	Testing    bool            `json:"nodesTesting"`
-	Probing    bool            `json:"nodesProbing"`
-	System     SystemInfo      `json:"system"`
-	Now        int64           `json:"now"`
+	Version    VersionInfo      `json:"version"`
+	VPN        VPNInfo          `json:"vpn"`
+	Traffic    TrafficInfo      `json:"traffic"`
+	Settings   config.Settings  `json:"settings"`
+	Protocols  []Protocol       `json:"protocols"`
+	ActiveKey  string           `json:"activeProtocol"`
+	Nodes      []node.Node      `json:"nodes"`
+	ActiveNode string           `json:"activeNode"`
+	Testing    bool             `json:"nodesTesting"`
+	Probing    bool             `json:"nodesProbing"`
+	System     SystemInfo       `json:"system"`
+	License    license.Snapshot `json:"license"`
+	Now        int64            `json:"now"`
 }
 
 // Snapshot builds the current UI state.
@@ -219,7 +221,8 @@ func (b *Bridge) snapshot() Snapshot {
 			KillSwitch: killswitch.Enabled(),
 			AutoStart:  s.AutoStart,
 		},
-		Now: time.Now().UnixMilli(),
+		License: b.licenseSnapshot(),
+		Now:     time.Now().UnixMilli(),
 	}
 }
 

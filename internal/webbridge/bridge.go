@@ -11,9 +11,11 @@
 package webbridge
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -26,6 +28,7 @@ import (
 
 	"github.com/aethergui/aethergui/internal/app"
 	"github.com/aethergui/aethergui/internal/config"
+	"github.com/aethergui/aethergui/internal/license"
 	"github.com/aethergui/aethergui/internal/logx"
 	"github.com/aethergui/aethergui/internal/updater"
 	"github.com/aethergui/aethergui/internal/vpn"
@@ -44,11 +47,16 @@ type Bridge struct {
 	onHide   func()
 	lastPing time.Time
 
-	// license/update are resolved at start-up and on demand. They must never
-	// be fetched per snapshot, which would hit the network every second.
-	upMu    sync.Mutex
-	license updater.License
-	update  *updater.UpdateInfo
+	upMu   sync.Mutex
+	update *updater.UpdateInfo
+}
+
+type licenseService interface {
+	Snapshot() license.Snapshot
+	Activate(context.Context, string) (license.Snapshot, error)
+	Revalidate(context.Context, bool) (license.Snapshot, error)
+	SetPolicy(license.Policy)
+	OnChange(func(license.Snapshot))
 }
 
 // Config wires the bridge.
@@ -72,17 +80,17 @@ func New(cfg Config) *Bridge {
 	a.OnNodes(func() { b.pushSnapshot() })
 	a.OnCore(func() { b.pushSnapshot() })
 	a.Traffic.Subscribe(func(app.TrafficSample) { b.pushSnapshot() })
+	if svc, ok := a.License.(licenseService); ok {
+		svc.OnChange(func(license.Snapshot) { b.pushSnapshot() })
+	}
 	logx.Subscribe(func(e logx.Entry) { b.push("log", e) })
 	go b.startupChecks()
 	return b
 }
 
-// startupChecks resolves the license window and looks for updates just after
-// launch. Neither may block start-up: an offline machine simply ends up with
-// an "offline" license and no update offer.
+// startupChecks looks for updates just after launch without blocking start-up.
 func (b *Bridge) startupChecks() {
 	time.Sleep(1500 * time.Millisecond)
-	b.refreshLicense()
 	b.refreshUpdate()
 }
 
@@ -149,6 +157,9 @@ func (b *Bridge) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/stream", b.guard(b.stream))
 	mux.HandleFunc("/api/snapshot", b.guard(b.getSnapshot))
+	mux.HandleFunc("/api/license", b.guard(b.getLicense))
+	mux.HandleFunc("/api/license/activate", b.guard(b.activateLicense))
+	mux.HandleFunc("/api/license/revalidate", b.guard(b.revalidateLicense))
 	mux.HandleFunc("/api/logs", b.guard(b.logs))
 	mux.HandleFunc("/api/traffic/series", b.guard(b.series))
 	mux.HandleFunc("/api/connect", b.guard(b.connect))
@@ -251,6 +262,112 @@ func (b *Bridge) getSnapshot(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, b.snapshot())
 }
 
+func (b *Bridge) getLicense(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, b.licenseSnapshot())
+}
+
+func (b *Bridge) activateLicense(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Key string `json:"key"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	body.Key = strings.TrimSpace(body.Key)
+	if body.Key == "" || len(body.Key) > 64 {
+		b.writeLicenseError(w, http.StatusBadRequest, "bad_input", "请输入有效的授权码", b.licenseSnapshot())
+		return
+	}
+	svc, ok := b.licenseService()
+	if !ok {
+		b.writeLicenseError(w, http.StatusServiceUnavailable, "internal", "授权服务未初始化", b.licenseSnapshot())
+		return
+	}
+	snapshot, err := svc.Activate(r.Context(), body.Key)
+	if err != nil {
+		status, code, message := mapLicenseError(err)
+		b.writeLicenseError(w, status, code, message, snapshot)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "license": snapshot})
+}
+
+func (b *Bridge) revalidateLicense(w http.ResponseWriter, r *http.Request) {
+	svc, ok := b.licenseService()
+	if !ok {
+		b.writeLicenseError(w, http.StatusServiceUnavailable, "internal", "授权服务未初始化", b.licenseSnapshot())
+		return
+	}
+	snapshot, err := svc.Revalidate(r.Context(), true)
+	if err != nil {
+		status, code, message := mapLicenseError(err)
+		b.writeLicenseError(w, status, code, message, snapshot)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "license": snapshot})
+}
+
+func (b *Bridge) licenseService() (licenseService, bool) {
+	if b.app == nil || b.app.License == nil {
+		return nil, false
+	}
+	svc, ok := b.app.License.(licenseService)
+	return svc, ok
+}
+
+func (b *Bridge) licenseSnapshot() license.Snapshot {
+	if b.app != nil && b.app.License != nil {
+		return b.app.License.Snapshot()
+	}
+	return license.Snapshot{State: license.StateTrial, CanConnect: true, DaysLeft: -1}
+}
+
+func (b *Bridge) writeLicenseError(w http.ResponseWriter, status int, code, message string, snapshot license.Snapshot) {
+	writeJSON(w, status, map[string]any{
+		"ok":      false,
+		"error":   map[string]string{"code": code, "message": message},
+		"license": snapshot,
+	})
+}
+
+func mapLicenseError(err error) (int, string, string) {
+	var gate *license.GateError
+	if errors.As(err, &gate) {
+		code := gate.Code
+		if code == "" {
+			code = "denied"
+		}
+		message := gate.Message
+		if message == "" {
+			message = defaultLicenseMessage(code)
+		}
+		return http.StatusUnprocessableEntity, code, message
+	}
+	if errors.Is(err, license.ErrUnreachable) {
+		return http.StatusServiceUnavailable, "unreachable", "授权服务器不可达，请稍后重试"
+	}
+	return http.StatusBadRequest, "bad_input", err.Error()
+}
+
+func defaultLicenseMessage(code string) string {
+	switch code {
+	case "invalid_key":
+		return "授权码无效"
+	case "revoked":
+		return "授权已被撤销"
+	case "expired":
+		return "授权已过期"
+	case "activation_limit":
+		return "授权激活次数已达上限"
+	case "product_mismatch":
+		return "授权不适用于当前产品"
+	case "invalid_token":
+		return "授权凭证无效"
+	default:
+		return "授权请求被拒绝"
+	}
+}
+
 func (b *Bridge) logs(w http.ResponseWriter, r *http.Request) {
 	n := 400
 	if v := r.URL.Query().Get("limit"); v != "" {
@@ -332,6 +449,17 @@ func (b *Bridge) stream(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (b *Bridge) connect(w http.ResponseWriter, r *http.Request) {
+	if b.app.License != nil {
+		if err := b.app.License.AllowConnect(); err != nil {
+			message := err.Error()
+			var gate *license.GateError
+			if errors.As(err, &gate) && gate.Message != "" {
+				message = gate.Message
+			}
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "license_denied", "message": message})
+			return
+		}
+	}
 	go func() {
 		if err := b.app.Connect(); err != nil {
 			logx.Errorf("[ui] connect: %v", err)
@@ -585,14 +713,8 @@ func (b *Bridge) windowQuit(w http.ResponseWriter, _ *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// updates & license
+// updates
 // ---------------------------------------------------------------------------
-
-func (b *Bridge) licenseState() updater.License {
-	b.upMu.Lock()
-	defer b.upMu.Unlock()
-	return b.license
-}
 
 func (b *Bridge) updateState() *updater.UpdateInfo {
 	b.upMu.Lock()
@@ -600,18 +722,16 @@ func (b *Bridge) updateState() *updater.UpdateInfo {
 	return b.update
 }
 
-func (b *Bridge) refreshLicense() {
-	lic := updater.LicenseStatus(config.Dir())
-	b.upMu.Lock()
-	b.license = lic
-	b.upMu.Unlock()
-	if lic.Expired {
-		logx.Warnf("[update] license expired at %s", lic.ExpiryAt)
-	}
-}
-
 func (b *Bridge) refreshUpdate() *updater.UpdateInfo {
-	info := updater.Check(b.version, b.app.Core.Version())
+	manifest, err := updater.FetchManifest()
+	if err != nil {
+		logx.Warnf("[update] fetch manifest: %v", err)
+		return b.updateState()
+	}
+	if svc, ok := b.licenseService(); ok {
+		svc.SetPolicy(manifest.Policy())
+	}
+	info := updater.CheckFromManifest(manifest, b.version, b.app.Core.Version())
 	b.upMu.Lock()
 	b.update = info
 	b.upMu.Unlock()
@@ -620,12 +740,8 @@ func (b *Bridge) refreshUpdate() *updater.UpdateInfo {
 
 // updateCheck serves both the start-up probe and the manual button.
 func (b *Bridge) updateCheck(w http.ResponseWriter, _ *http.Request) {
-	b.refreshLicense()
 	info := b.refreshUpdate()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"license": b.licenseState(),
-		"update":  info,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"update": info})
 }
 
 // updateGUI installs a release bundle — GUI and its bundled core swapped in

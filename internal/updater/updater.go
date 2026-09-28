@@ -1,14 +1,11 @@
 // Package updater handles GUI/core update checks and the remote license
-// window published in the release repository.
+// policy published in the release repository.
 //
 // Two independent feeds are consulted:
 //
 //   - the GUI comes from the publishing repo (version.json at its root), which
 //     also carries the license parameters so they can be tuned remotely;
 //   - the Aether core comes from the official upstream releases.
-//
-// A machine that cannot reach the network is never locked out: every check
-// fails open.
 package updater
 
 import (
@@ -21,24 +18,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/aethergui/aethergui/internal/license"
 	"golang.org/x/sys/windows/registry"
 )
 
 const (
 	// ManifestURL is version.json at the root of the publishing repo.
-	ManifestURL = "https://raw.githubusercontent.com/hezhanleiok/aether/main/version.json"
+	ManifestURL = "https://raw.githubusercontent.com/lumi210/magicvpn/main/version.json"
 	// CoreReleaseAPI is the official Aether core release feed; the pinned tag
 	// is appended when resolving which core to install.
 	CoreReleaseAPI = "https://api.github.com/repos/CluvexStudio/Aether/releases"
-
-	// DefaultMessage / DefaultContact are used when the manifest omits them.
-	DefaultMessage = "软件已到期，请联系作者续期"
-	DefaultContact = "Telegram: @xiaoheok\nEmail: hezhanleiok@gmail.com"
 )
+
+// LicensePolicy is the license policy carried by version.json.
+type LicensePolicy struct {
+	Enabled bool `json:"enabled"`
+	// Expiry is deprecated: retained for wire compatibility; no longer enforced.
+	Expiry    string `json:"expiry"`
+	TrialDays int    `json:"trial_days"`
+	Message   string `json:"message"`
+	Contact   string `json:"contact"`
+}
 
 // Manifest mirrors version.json in the publishing repository.
 type Manifest struct {
@@ -54,13 +57,22 @@ type Manifest struct {
 		Version string `json:"version"`
 		Notes   string `json:"notes"`
 	} `json:"core"`
-	License struct {
-		Enabled   bool   `json:"enabled"`
-		Expiry    string `json:"expiry"`     // fixed cutoff, "2006-01-02"
-		TrialDays int    `json:"trial_days"` // or days counted from first run
-		Message   string `json:"message"`
-		Contact   string `json:"contact"`
-	} `json:"license"`
+	License LicensePolicy `json:"license"`
+}
+
+// Policy converts the manifest's wire representation into the license
+// manager's runtime policy. The deprecated fixed expiry is intentionally
+// ignored; expiry decisions belong to the license manager.
+func (m *Manifest) Policy() license.Policy {
+	if m == nil {
+		return license.Policy{}
+	}
+	return license.Policy{
+		Enabled:   m.License.Enabled,
+		TrialDays: m.License.TrialDays,
+		Message:   m.License.Message,
+		Contact:   m.License.Contact,
+	}
 }
 
 // UpdateInfo is the result of one check, sent to the UI.
@@ -77,16 +89,6 @@ type UpdateInfo struct {
 	CoreNotes string `json:"core_notes"`
 	CheckedAt string `json:"checked_at"`
 	Error     string `json:"error,omitempty"`
-}
-
-// License is the state of the remote license window.
-type License struct {
-	Expired  bool   `json:"expired"`
-	DaysLeft int    `json:"days_left"` // -1 means unlimited/unknown
-	ExpiryAt string `json:"expiry_at,omitempty"`
-	Message  string `json:"message"`
-	Contact  string `json:"contact"`
-	Offline  bool   `json:"offline"`
 }
 
 // systemProxy returns the proxy configured in Internet Settings, if enabled.
@@ -193,16 +195,13 @@ func newer(a, b string) bool {
 	return false
 }
 
-// Check compares the running GUI/core against both feeds.
-func Check(guiVer, coreVer string) *UpdateInfo {
+// CheckFromManifest compares the running GUI/core against an already-fetched
+// manifest without performing any network access.
+func CheckFromManifest(m *Manifest, guiVer, coreVer string) *UpdateInfo {
 	info := &UpdateInfo{CheckedAt: time.Now().Format(time.RFC3339)}
-
-	m, err := FetchManifest()
-	if err != nil {
-		info.Error = err.Error()
-		return info // offline: there is nothing to compare against
+	if m == nil {
+		return info
 	}
-
 	if m.GUI.Version != "" && newer(m.GUI.Version, guiVer) {
 		info.GUIHas = true
 		info.GUIVer = m.GUI.Version
@@ -218,68 +217,13 @@ func Check(guiVer, coreVer string) *UpdateInfo {
 	return info
 }
 
-// firstRun records (once) when this installation was first started, so a
-// trial window can be counted from the user's own beginning.
-func firstRun(dir string) time.Time {
-	p := filepath.Join(dir, "firstrun")
-	if b, err := os.ReadFile(p); err == nil {
-		if n, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil && n > 0 {
-			return time.Unix(n, 0)
-		}
-	}
-	now := time.Now()
-	_ = os.MkdirAll(dir, 0o755)
-	_ = os.WriteFile(p, []byte(strconv.FormatInt(now.Unix(), 10)), 0o644)
-	return now
-}
-
-// LicenseStatus evaluates the remote license window. Offline, disabled or
-// unreadable configurations always grant access.
-func LicenseStatus(dir string) License {
+// Check fetches the manifest and compares the running GUI/core against it.
+func Check(guiVer, coreVer string) (*UpdateInfo, error) {
 	m, err := FetchManifest()
 	if err != nil {
-		return License{Offline: true, DaysLeft: -1}
+		return nil, err
 	}
-	lc := m.License
-	if !lc.Enabled {
-		return License{DaysLeft: -1}
-	}
-
-	msg := lc.Message
-	if strings.TrimSpace(msg) == "" {
-		msg = DefaultMessage
-	}
-	contact := lc.Contact
-	if strings.TrimSpace(contact) == "" {
-		contact = DefaultContact
-	}
-
-	// A fixed cutoff wins over the rolling trial window.
-	if lc.Expiry != "" {
-		if t, err := time.Parse("2006-01-02", lc.Expiry); err == nil {
-			end := t.AddDate(0, 0, 1) // the expiry day itself is still usable
-			if !time.Now().Before(end) {
-				return License{Expired: true, Message: msg, Contact: contact, ExpiryAt: lc.Expiry}
-			}
-			return License{DaysLeft: int(time.Until(end).Hours() / 24), ExpiryAt: lc.Expiry}
-		}
-	}
-	if lc.TrialDays > 0 {
-		deadline := firstRun(dir).AddDate(0, 0, lc.TrialDays)
-		if !time.Now().Before(deadline) {
-			return License{
-				Expired:  true,
-				Message:  msg,
-				Contact:  contact,
-				ExpiryAt: deadline.Format("2006-01-02"),
-			}
-		}
-		return License{
-			DaysLeft: int(time.Until(deadline).Hours() / 24),
-			ExpiryAt: deadline.Format("2006-01-02"),
-		}
-	}
-	return License{DaysLeft: -1}
+	return CheckFromManifest(m, guiVer, coreVer), nil
 }
 
 // download fetches url into dest, writing through a .part file first.
