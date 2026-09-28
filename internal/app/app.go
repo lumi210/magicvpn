@@ -17,12 +17,19 @@ import (
 	"github.com/aethergui/aethergui/internal/config"
 	"github.com/aethergui/aethergui/internal/coremgr"
 	"github.com/aethergui/aethergui/internal/killswitch"
+	"github.com/aethergui/aethergui/internal/license"
 	"github.com/aethergui/aethergui/internal/logx"
 	"github.com/aethergui/aethergui/internal/node"
 	"github.com/aethergui/aethergui/internal/sysproxy"
 	"github.com/aethergui/aethergui/internal/vpn"
 	"github.com/aethergui/aethergui/internal/watchguard"
 )
+
+// LicenseGate is the license surface required by App.
+type LicenseGate interface {
+	AllowConnect() error
+	Snapshot() license.Snapshot
+}
 
 // App is the composed application.
 type App struct {
@@ -32,12 +39,12 @@ type App struct {
 	Pool     *node.Pool
 	Guard    *watchguard.Watch
 	Traffic  *TrafficSampler
+	License  LicenseGate
 
 	subMu   sync.Mutex
 	onState []func(vpn.State)
 	onNodes []func()
 	onCore  []func()
-
 }
 
 // pickBackend chooses the core driver per settings: an explicit kind wins;
@@ -266,8 +273,6 @@ func (a *App) recoverFromFailedPin(st vpn.State) {
 	}()
 }
 
-
-
 // mimH2Fallback retries MIM over HTTP/2 when the default H3 (QUIC) path fails.
 // The core supports --mim --h2; this gives MIM a second chance on networks
 // where QUIC is blocked but TCP 443 gets through.
@@ -302,6 +307,11 @@ func (a *App) GatewayUnhealthy() {
 
 // Connect starts the VPN honoring the current settings and mode.
 func (a *App) Connect() error {
+	if a.License != nil {
+		if err := a.License.AllowConnect(); err != nil {
+			return fmt.Errorf("license: %w", err)
+		}
+	}
 	s := a.Settings
 	// A fresh, user-initiated connect starts the gool exit search over. The
 	// guard's own retries must not reset the counter, or it would loop forever.
@@ -354,6 +364,15 @@ func (a *App) Connect() error {
 
 	go a.connectWatchdog()
 	return nil
+}
+
+// LicenseSnapshot returns the current license state, or its zero value when
+// licensing has not been configured by the embedding executable.
+func (a *App) LicenseSnapshot() license.Snapshot {
+	if a.License == nil {
+		return license.Snapshot{}
+	}
+	return a.License.Snapshot()
 }
 
 // connectWatchdog guards against the UI showing "connecting" forever: if the

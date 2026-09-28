@@ -60,7 +60,8 @@ func main() {
 	s.UseH2 = p.UseH2
 	s.ScanMode = config.ScanTurbo
 	s.AutoReconnect = false
-	if err := a.VPN.Connect(s); err != nil {
+	a.Settings = s
+	if err := a.Connect(); err != nil {
 		fmt.Println("FAIL connect:", err)
 		os.Exit(1)
 	}
