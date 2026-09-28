@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AetherVPN — Fast · Secure · Global</title>
+<title>MagicVPN — Fast · Secure · Global</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -57,7 +57,7 @@
     <div class="brand">
       <span class="brand-mark"><svg><use href="#i-play"/></svg></span>
       <span class="brand-text">
-        <strong>AetherVPN</strong>
+        <strong>MagicVPN</strong>
         <small>Fast · Secure · Global</small>
       </span>
     </div>
@@ -335,18 +335,36 @@
         <div class="stack">
           <div class="card about-card">
             <span class="about-mark"><svg><use href="#i-shield"/></svg></span>
-            <h3>AetherVPN</h3>
+            <h3>MagicVPN</h3>
             <p class="about-desc">作者 xiaohe · Better Connection, A Wider World</p>
             <div class="kv-list wide">
               <div class="kv"><span>作者</span><b>xiaohe</b></div>
               <div class="kv"><span>GUI 版本</span><b id="abGui">—</b></div>
               <div class="kv"><span>Core 版本</span><b id="abCore">—</b></div>
               <div class="kv"><span>后端</span><b id="abBackend">—</b></div>
-              <div class="kv"><span>授权状态</span><b id="abExpiry">—</b></div>
+              <div class="kv license-summary"><span>授权状态</span><b id="abExpiry">检查中…</b></div>
+            </div>
+            <div class="license-panel" id="licensePanel">
+              <div class="license-head">
+                <div class="license-state">
+                  <span class="badge live" id="licenseBadge">检查中</span>
+                  <span class="license-offline" id="licenseOffline" hidden>服务器暂不可达</span>
+                </div>
+                <button class="btn small" id="licenseRevalidate" type="button"><svg class="mini"><use href="#i-refresh"/></svg><span>立即验证</span></button>
+              </div>
+              <div class="license-details" id="licenseDetails">正在读取授权状态…</div>
+              <form class="license-activate" id="licenseActivateForm">
+                <label class="field license-key-field">
+                  <span>授权码</span>
+                  <input id="licenseKey" type="text" spellcheck="false" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX">
+                </label>
+                <button class="btn primary" id="licenseActivate" type="submit">立即激活</button>
+              </form>
+              <p class="license-error" id="licenseError" hidden></p>
             </div>
             <div class="about-links">
               <button class="btn small" type="button" data-url="https://github.com/hezhanleiok"><svg class="brand"><use href="#b-github"/></svg>GitHub 主页</button>
-              <button class="btn small" type="button" data-url="https://github.com/hezhanleiok/aether"><svg class="brand"><use href="#b-github"/></svg>项目主页</button>
+              <button class="btn small" type="button" data-url="https://github.com/lumi210/magicvpn"><svg class="brand"><use href="#b-github"/></svg>项目主页</button>
               <button class="btn small" type="button" data-url="https://t.me/xiaoheok"><svg class="brand"><use href="#b-telegram"/></svg>Telegram</button>
               <button class="btn small" type="button" data-url="mailto:hezhanleiok@gmail.com"><svg class="brand mail"><use href="#b-mail"/></svg>Email</button>
               <button class="btn small primary" id="abCheckUpdate" type="button"><svg class="mini"><use href="#i-download"/></svg>检查更新</button>
@@ -358,8 +376,8 @@
     </div>
 
     <footer class="footer">
-      <span>AetherVPN · by xiaohe</span>
-      <span>github.com/hezhanleiok/aether</span>
+      <span>MagicVPN · by xiaohe</span>
+      <span>github.com/lumi210/magicvpn</span>
     </footer>
   </main>
 </div>

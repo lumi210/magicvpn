@@ -1,4 +1,4 @@
-/* AetherVPN — web UI controller.
+/* MagicVPN — web UI controller.
  * Talks to the local webbridge over fetch + SSE. Every control below drives a
  * real backend action: connect/disconnect, protocol switch, node pinning and
  * latency sweeps, split rules, Windows proxy take-over, core management. */
@@ -328,6 +328,7 @@ function connectSSE() {
 function applySnapshot(next) {
   const prevStatus = S && S.vpn ? S.vpn.status : null;
   S = next;
+  if (next.license) licState = next.license;
   if (next.settings) lang = next.settings.language || 'zh-CN';
   document.documentElement.dataset.theme = (next.settings && next.settings.theme === 'dark') ? 'dark' : 'light';
   document.documentElement.lang = lang;
@@ -451,6 +452,11 @@ function renderHome() {
   $('#stDown').textContent = fmtBytes(t.downTotal);
   $('#stUp').textContent = fmtBytes(t.upTotal);
   $('#stDuration').textContent = fmtDur(connected || v.durationSec ? v.durationSec : 0);
+
+  const licenseBlocked = !!(licState && licState.can_connect === false);
+  $('#powerBtn').classList.toggle('license-blocked', licenseBlocked && !connected);
+  $('#powerBtn').setAttribute('aria-disabled', licenseBlocked && !connected ? 'true' : 'false');
+  if (licenseBlocked && !connected) $('#heroHint').textContent = lang === 'zh-CN' ? '授权不可用，请前往关于页激活或验证' : 'License unavailable. Open About to activate or validate.';
 
   if (page === 'home') drawChart();
 }
@@ -885,21 +891,137 @@ function renderAbout() {
   $('#abGui').textContent = 'v' + v.gui;
   $('#abCore').textContent = (v.core || '—').split('\n')[0];
   $('#abBackend').textContent = v.backend || '—';
-  const lic = $('#abExpiry');
-  if (lic) {
-    if (!licState) lic.textContent = '检查中…';
-    else if (licState.expired) lic.textContent = '已到期';
-    else if (licState.offline) lic.textContent = '未检查（离线）';
-    else if (licState.days_left >= 0) lic.textContent = licState.expiry_at + '（剩 ' + licState.days_left + ' 天）';
-    else lic.textContent = '无限制';
-  }
+  renderLicense();
 }
 
 // ── updates & license ────────────────────────────────────────────
-// Both the license window and the update feed live in version.json in the
-// publishing repo, so they can be retuned without shipping a new build.
 let licState = null;
 let updState = null;
+
+function licenseDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString(lang === 'zh-CN' ? 'zh-CN' : 'en-US');
+}
+
+function licenseTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString(lang === 'zh-CN' ? 'zh-CN' : 'en-US', { hour12: false });
+}
+
+function graceRemaining(value) {
+  const end = new Date(value).getTime();
+  if (!Number.isFinite(end)) return '';
+  const hours = Math.max(0, Math.ceil((end - Date.now()) / 3600000));
+  if (hours >= 48) return (lang === 'zh-CN' ? '宽限期还剩 ' : 'Grace period: ') + Math.ceil(hours / 24) + (lang === 'zh-CN' ? ' 天' : ' days');
+  return (lang === 'zh-CN' ? '宽限期还剩 ' : 'Grace period: ') + hours + (lang === 'zh-CN' ? ' 小时' : ' hours');
+}
+
+function licenseCopy(state) {
+  const zh = lang === 'zh-CN';
+  return {
+    trial: { label: zh ? '试用中' : 'Trial', cls: 'live' },
+    activated: { label: zh ? '已激活' : 'Activated', cls: 'ok' },
+    grace: { label: zh ? '离线宽限' : 'Offline grace', cls: 'warn' },
+    expired: { label: zh ? '已到期' : 'Expired', cls: 'bad' },
+    denied: { label: zh ? '已失效' : 'Invalid', cls: 'bad' },
+  }[state] || { label: zh ? '检查中' : 'Checking', cls: 'live' };
+}
+
+function renderLicense() {
+  const summary = $('#abExpiry'), badge = $('#licenseBadge'), details = $('#licenseDetails');
+  if (!summary || !badge || !details) return;
+  const form = $('#licenseActivateForm'), offline = $('#licenseOffline');
+  if (!licState) {
+    summary.textContent = lang === 'zh-CN' ? '检查中…' : 'Checking…';
+    badge.className = 'badge live';
+    badge.textContent = lang === 'zh-CN' ? '检查中' : 'Checking';
+    details.textContent = lang === 'zh-CN' ? '正在读取授权状态…' : 'Loading license status…';
+    form.hidden = false;
+    offline.hidden = true;
+    return;
+  }
+
+  const lic = licState, copy = licenseCopy(lic.state), zh = lang === 'zh-CN';
+  summary.innerHTML = `<span class="badge ${copy.cls}">${esc(copy.label)}</span>`;
+  badge.className = 'badge ' + copy.cls;
+  badge.textContent = copy.label;
+  offline.hidden = !(lic.offline && (lic.state === 'activated' || lic.state === 'grace'));
+  offline.textContent = zh ? '服务器暂不可达' : 'Server temporarily unreachable';
+  form.hidden = lic.state === 'activated';
+
+  const rows = [];
+  if (lic.state === 'trial') {
+    rows.push(`<strong>${zh ? `剩 ${Math.max(0, Number(lic.days_left) || 0)} 天（至 ${licenseDate(lic.trial_expires_at)}）` : `${Math.max(0, Number(lic.days_left) || 0)} days left (until ${licenseDate(lic.trial_expires_at)})`}</strong>`);
+    rows.push(zh ? '输入授权码可激活' : 'Enter a license key to activate');
+  } else if (lic.state === 'activated') {
+    if (lic.expires_at) rows.push(zh ? `有效期至 ${licenseDate(lic.expires_at)}${lic.days_left >= 0 ? `，剩 ${lic.days_left} 天` : ''}` : `Valid until ${licenseDate(lic.expires_at)}${lic.days_left >= 0 ? `, ${lic.days_left} days left` : ''}`);
+    rows.push(`${zh ? '授权码' : 'License key'}: …${esc(lic.key_hint || '—')}`);
+    if (lic.last_validated_at) rows.push(`${zh ? '上次验证' : 'Last validated'} ${licenseTime(lic.last_validated_at)}`);
+  } else if (lic.state === 'grace') {
+    rows.push(`<strong>${zh ? '请尽快联网验证' : 'Please reconnect and validate soon'}</strong>`);
+    rows.push(`${graceRemaining(lic.grace_expires_at)}（${zh ? '至' : 'until'} ${licenseDate(lic.grace_expires_at)}）`);
+  } else if (lic.state === 'expired' || lic.state === 'denied') {
+    rows.push(`<strong>${esc(lic.message || (zh ? (lic.state === 'expired' ? '授权已到期' : '授权码无效或已撤销') : 'License unavailable'))}</strong>`);
+    if (lic.contact) rows.push(esc(lic.contact));
+  }
+  details.innerHTML = rows.map((row) => `<span>${row}</span>`).join('');
+}
+
+async function licenseRequest(path, body) {
+  try {
+    const res = await fetch(path, body === undefined
+      ? { credentials: 'same-origin' }
+      : { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    let data = null;
+    try { data = await res.json(); } catch (_) { data = null; }
+    return { ok: res.ok, status: res.status, data };
+  } catch (_) {
+    return { ok: false, status: 0, data: null };
+  }
+}
+
+async function activateLicense() {
+  const input = $('#licenseKey'), button = $('#licenseActivate'), error = $('#licenseError');
+  const key = input.value.trim().toUpperCase();
+  input.value = key;
+  error.hidden = true;
+  button.disabled = true;
+  button.textContent = lang === 'zh-CN' ? '激活中…' : 'Activating…';
+  const result = await licenseRequest('/api/license/activate', { key });
+  button.disabled = false;
+  button.textContent = lang === 'zh-CN' ? '立即激活' : 'Activate now';
+  if (result.data && result.data.license) licState = result.data.license;
+  if (result.ok && result.data && result.data.ok) {
+    input.value = '';
+    renderAbout();
+    toast(lang === 'zh-CN' ? '激活成功' : 'Activation successful', 'ok');
+    return;
+  }
+  const message = result.status === 503
+    ? (lang === 'zh-CN' ? '授权服务器不可达，请稍后重试' : 'License server unavailable. Please try again later.')
+    : (result.data && (result.data.message || (result.data.error && result.data.error.message))) || (lang === 'zh-CN' ? '激活失败，请检查授权码' : 'Activation failed. Check the key.');
+  error.textContent = message;
+  error.hidden = false;
+  renderLicense();
+}
+
+async function revalidateLicense() {
+  const button = $('#licenseRevalidate'), label = button.querySelector('span');
+  button.disabled = true;
+  label.textContent = lang === 'zh-CN' ? '验证中…' : 'Validating…';
+  const result = await licenseRequest('/api/license/revalidate', {});
+  button.disabled = false;
+  label.textContent = lang === 'zh-CN' ? '立即验证' : 'Validate now';
+  if (result.data && result.data.license) licState = result.data.license;
+  renderAbout();
+  if (result.ok && result.data && result.data.ok) toast(lang === 'zh-CN' ? '验证成功' : 'Validation successful', 'ok');
+  else if (result.status === 503) toast(lang === 'zh-CN' ? '服务器不可达' : 'Server unreachable', 'err');
+  else toast((result.data && (result.data.message || (result.data.error && result.data.error.message))) || (lang === 'zh-CN' ? '验证失败' : 'Validation failed'), 'err');
+}
 
 const guiVer = () => 'v' + (S.version.gui || '');
 const coreVer = () => (S.version.core || '—').split('\n')[0];
@@ -914,22 +1036,6 @@ function showModal(html, cls) {
   box.className = 'modal' + (cls ? ' ' + cls : '');
   box.innerHTML = html;
   $('#modalMask').hidden = false;
-}
-
-// An expired build offers exactly one button: acknowledging it stops the
-// tunnel and exits, as agreed.
-function showExpired(lic) {
-  showModal(`
-    <h3>软件已到期</h3>
-    <p class="m-warn">${esc(lic.message || '软件已到期，请联系作者续期')}</p>
-    <p class="m-contact">${esc(lic.contact || 'Telegram: @xiaoheok\nEmail: hezhanleiok@gmail.com').replace(/\n/g, '<br>')}</p>
-    <div class="modal-act"><button class="btn primary" id="expOk" type="button">确定</button></div>
-  `, 'expired');
-  $('#expOk').onclick = async () => {
-    $('#expOk').disabled = true;
-    await api('/api/disconnect');
-    await api('/api/window/quit');
-  };
 }
 
 // Updates are applied in place — the download never leaves the app.
@@ -974,11 +1080,7 @@ async function checkUpdates(manual) {
     if (manual) toast('检查更新失败，请检查网络连接', 'err');
     return;
   }
-  licState = r.license || null;
   updState = r.update || null;
-  if (page === 'about') renderAbout();
-  // The license window always wins over an update offer.
-  if (licState && licState.expired) { showExpired(licState); return; }
   if (manual) {
     if (updState && (updState.gui_has || updState.core_has)) showUpdateDialog(updState);
     else toast('已是最新版本', 'ok');
@@ -1006,8 +1108,19 @@ function bind() {
     const st = S.vpn.status;
     if (st === 'Connected' || st === 'Connecting' || st === 'Reconnecting') await api('/api/disconnect');
     else {
+      if (licState && licState.can_connect === false) {
+        toast(licState.message || (lang === 'zh-CN' ? '授权不可用，请激活或重新验证' : 'License unavailable. Activate or validate it.'), 'err');
+        go('about');
+        return;
+      }
       if (!S.version.core || S.version.coreHealth === 'Missing') toast(tx('needCore'), 'err');
-      await api('/api/connect');
+      const result = await licenseRequest('/api/connect');
+      if (!result.ok && result.status === 403 && result.data && result.data.error === 'license_denied') {
+        toast(result.data.message || (lang === 'zh-CN' ? '授权不可用' : 'License unavailable'), 'err');
+        go('about');
+      } else if (!result.ok) {
+        toast(lang === 'zh-CN' ? '连接请求失败' : 'Connection request failed', 'err');
+      }
     }
   };
 
@@ -1072,6 +1185,9 @@ function bind() {
   };
 
   $('#abCheckUpdate').onclick = () => checkUpdates(true);
+  $('#licenseKey').oninput = (e) => { e.target.value = e.target.value.toUpperCase(); $('#licenseError').hidden = true; };
+  $('#licenseActivateForm').onsubmit = (e) => { e.preventDefault(); activateLicense(); };
+  $('#licenseRevalidate').onclick = revalidateLicense;
   $$('[data-url]').forEach((b) => { b.onclick = () => api('/api/system/open', { url: b.dataset.url }); });
 
   window.addEventListener('resize', () => drawChart());
@@ -1111,14 +1227,18 @@ window.addEventListener('unhandledrejection', (e) => {
     dpr: window.devicePixelRatio,
     ua: navigator.userAgent.replace(/^.*(Edg\/[\d.]+).*$/, '$1'),
   });
-  const snap = await api('/api/snapshot');
+  const [snap, hist, license] = await Promise.all([
+    api('/api/snapshot'),
+    api('/api/logs?limit=600'),
+    licenseRequest('/api/license'),
+  ]);
   if (!snap) { document.body.innerHTML = '<div style="padding:40px;font:14px system-ui">无法连接到本地服务 /api/snapshot</div>'; return; }
-  const hist = await api('/api/logs?limit=600');
   if (hist && hist.entries) logs = hist.entries;
+  if (license.ok && license.data) licState = license.data;
   applySnapshot(snap);
   go('home');
   connectSSE();
-  checkUpdates(false); // start-up probe: license window first, then updates
+  checkUpdates(false);
 })();
 
 })();
