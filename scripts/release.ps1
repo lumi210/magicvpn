@@ -23,9 +23,9 @@ $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $root
 
 $build = Join-Path $root "build"
-$stage = Join-Path $build "AetherVPN-$Version-win-x64"
-$zip = Join-Path $build "AetherVPN-$Version-win-x64.zip"
-$setup = Join-Path $build "AetherVPN-Setup-$Version.exe"
+$stage = Join-Path $build "MagicVPN-$Version-win-x64"
+$zip = Join-Path $build "MagicVPN-$Version-win-x64.zip"
+$setup = Join-Path $build "MagicVPN-Setup-$Version.exe"
 $payload = Join-Path $root "cmd\aethersetup\payload\bundle.zip"
 $payloadBak = Join-Path $env:TEMP "bundle-placeholder.zip"
 
@@ -41,16 +41,16 @@ try {
 
     # ---------------------------------------------------------------- Build
     Write-Host "[1/6] Build" -ForegroundColor Cyan
-    go build -ldflags="-H=windowsgui" -o (Join-Path $build "AetherVPN.exe") ./cmd/aethergui
+    go build -ldflags="-H=windowsgui" -o (Join-Path $build "MagicVPN.exe") ./cmd/aethergui
     if ($LASTEXITCODE -ne 0) { throw "GUI build failed" }
-    Write-Host "      GUI      -> AetherVPN.exe"
+    Write-Host "      GUI      -> MagicVPN.exe"
 
     # ---------------------------------------------------------------- Stage
     Write-Host "[2/6] Stage" -ForegroundColor Cyan
     New-Item -ItemType Directory -Force -Path (Join-Path $stage "core-bin") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $stage "docs") | Out-Null
 
-    Copy-Item (Join-Path $build "AetherVPN.exe") (Join-Path $stage "AetherVPN.exe") -Force
+    Copy-Item (Join-Path $build "MagicVPN.exe") (Join-Path $stage "MagicVPN.exe") -Force
     Copy-Item (Join-Path $root "core-bin\aether.exe") (Join-Path $stage "core-bin\aether.exe") -Force
 
     # Both binaries are pure Go (CGO_ENABLED=0, no `import "C"` anywhere), so
@@ -58,12 +58,12 @@ try {
     # beside them. Nothing is added here just to make the package look bigger.
 
     Write-Utf8 (Join-Path $stage "README.txt") @"
-AetherVPN $Version
+MagicVPN $Version
 
-  双击 AetherVPN.exe 即可启动，无需安装。
+  双击 MagicVPN.exe 即可启动，无需安装。
 
 目录说明
-  AetherVPN.exe        图形界面（Go 编写，静态链接，无需额外运行库）
+  MagicVPN.exe        图形界面（Go 编写，静态链接，无需额外运行库）
   core-bin\aether.exe  Aether 核心，独立进程，由界面调用
   docs\                项目文档
   LICENSE.txt          许可与第三方声明
@@ -78,7 +78,7 @@ AetherVPN $Version
 "@
 
     Write-Utf8 (Join-Path $stage "LICENSE.txt") @"
-AetherVPN
+MagicVPN
 Copyright (c) xiaohe
 
 本客户端（GUI）由 xiaohe 开发并发布，采用试用授权：自首次启动起可免费
@@ -138,7 +138,7 @@ $Version
     # ------------------------------------------------------------- Validate
     Write-Host "[3/6] Validate" -ForegroundColor Cyan
     $required = @(
-        (Join-Path $stage "AetherVPN.exe"),
+        (Join-Path $stage "MagicVPN.exe"),
         (Join-Path $stage "core-bin\aether.exe"),
         (Join-Path $stage "README.txt"),
         (Join-Path $stage "LICENSE.txt"),
@@ -212,12 +212,12 @@ $Version
     $notes = $notes.Replace("{version}", $Version)
     $notes += "`n`n### SHA256`n`n``````n" + ($sums -join "`n") + "`n``````n"
 
-    $body = @{ tag_name = "v$Version"; name = "AetherVPN v$Version"; body = $notes; draft = $false; prerelease = $false } | ConvertTo-Json
+    $body = @{ tag_name = "v$Version"; name = "MagicVPN v$Version"; body = $notes; draft = $false; prerelease = $false } | ConvertTo-Json
 
     # Splatting so the proxy key is only present when one is configured -
     # passing -Proxy $null is an error.
     $post = @{
-        Uri         = "https://api.github.com/repos/hezhanleiok/aether/releases"
+        Uri         = "https://api.github.com/repos/lumi210/magicvpn/releases"
         Method      = 'Post'
         Headers     = $hdr
         ContentType = "application/json; charset=utf-8"
@@ -229,7 +229,7 @@ $Version
     foreach ($f in @((Split-Path $zip -Leaf), (Split-Path $setup -Leaf), "SHA256SUMS.txt")) {
         $bytes = [System.IO.File]::ReadAllBytes((Join-Path $build $f))
         $put = @{
-            Uri         = "https://uploads.github.com/repos/hezhanleiok/aether/releases/$($rel.id)/assets?name=$f"
+            Uri         = "https://uploads.github.com/repos/lumi210/magicvpn/releases/$($rel.id)/assets?name=$f"
             Method      = 'Post'
             Headers     = $hdr
             ContentType = "application/octet-stream"
