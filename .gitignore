@@ -19,6 +19,7 @@ aether-src.tar.gz
 Aether-HEAD/
 .codebuddy/
 .dsh-vision-router/
+.omo/
 
 # The installer's embedded payload placeholder must stay in the repo
 # (release.ps1 swaps in the real bundle only at build time).
