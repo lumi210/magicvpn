@@ -1,17 +1,17 @@
-## AetherVPN v{version}
+## MagicVPN v{version}
 
 ### 下载
 
 | 文件 | 说明 |
 | --- | --- |
-| `AetherVPN-{version}-win-x64.zip` | 便携版：解压后双击 `AetherVPN.exe` 即可运行 |
-| `AetherVPN-Setup-{version}.exe` | 安装版：安装完成后自动创建桌面快捷方式 |
+| `MagicVPN-{version}-win-x64.zip` | 便携版：解压后双击 `MagicVPN.exe` 即可运行 |
+| `MagicVPN-Setup-{version}.exe` | 安装版：安装完成后自动创建桌面快捷方式 |
 | `SHA256SUMS.txt` | 校验和，用于确认下载到的文件完整且未被篡改 |
 
 ### 便携版目录结构
 
 ```
-AetherVPN.exe          图形界面（Go 静态链接，无需额外运行库）
+MagicVPN.exe          图形界面（Go 静态链接，无需额外运行库）
 core-bin\aether.exe    Aether 核心，独立进程
 docs\                  项目文档
 LICENSE.txt            许可与第三方声明

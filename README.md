@@ -1,4 +1,4 @@
-# AetherVPN — Windows VPN Client (Go + Aether Core)
+# MagicVPN — Windows VPN Client (Go + Aether Core)
 
 > 基于 [Aether](https://github.com/CluvexStudio/Aether) 核心构建的 Windows 图形客户端。
 > 作者：**xiaohe**
@@ -10,16 +10,16 @@ MASQUE / WARP-in-WARP / Gateway 发现与验证）全部由独立的 Aether Core
 
 | 文件 | 说明 |
 | --- | --- |
-| `AetherVPN-<版本>-win-x64.zip` | 便携版：解压后双击 `AetherVPN.exe` 即可运行 |
-| `AetherVPN-Setup-<版本>.exe` | 安装版：安装完成后自动创建桌面快捷方式 |
+| `MagicVPN-<版本>-win-x64.zip` | 便携版：解压后双击 `MagicVPN.exe` 即可运行 |
+| `MagicVPN-Setup-<版本>.exe` | 安装版：安装完成后自动创建桌面快捷方式 |
 
 两个版本均自带配套的 Aether 核心，无需另行下载。最新版本见
-[Releases](https://github.com/hezhanleiok/aether/releases)。
+[Releases](https://github.com/lumi210/magicvpn/releases)。
 
 ## 架构
 
 ```
-AetherVPN.exe (Go 外壳)
+MagicVPN.exe (Go 外壳)
    │
    ├─ 本机窗口 (WebView2 嵌入 Win32 窗口) + 托盘     ← cmd/aethergui/ui_windows.go
    │     └─ 降级：Edge/Chrome --app 无地址栏窗口（无 WebView2 运行时时）
@@ -79,8 +79,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 ### 产物结构
 
 ```
-AetherVPN-<版本>\
-  AetherVPN.exe          ← GUI 程序（双击即用，无需安装）
+MagicVPN-<版本>\
+  MagicVPN.exe          ← GUI 程序（双击即用，无需安装）
   core-bin\
     aether.exe           ← Aether Core，独立进程
   README.txt
@@ -155,6 +155,6 @@ Core 版本变化只需：替换 core-bin\aether.exe（或 libaether.dll + 设�
 
 - **特别感谢 [Aether](https://github.com/CluvexStudio/Aether)（CluvexStudio）** —
   本客户端的全部网络能力（WARP / WireGuard / MASQUE / MASQUE-in-MASQUE / Gool /
-  网关发现与验证）都来自这个项目。没有 Aether，就没有 AetherVPN。
+  网关发现与验证）都来自这个项目。没有 Aether，就没有 MagicVPN。
 - 感谢 [Aethery](https://github.com/ZethRise/Aethery) 在移动端上的探索与参考。
 
